@@ -1,0 +1,86 @@
+use regex::Regex;
+use std::fs;
+use std::fs::File;
+use std::io;
+use std::io::prelude::*;
+use std::path::Path;
+
+fn main() {
+    println!("Enter directory or file path:");
+    let mut path_str = String::new();
+    io::stdin()
+        .read_line(&mut path_str)
+        .expect("Failed to read path");
+
+    let path = Path::new(path_str.trim());
+
+    if path.is_file() {
+        let file_name = path.file_name().unwrap().to_str().unwrap().to_owned();
+        println!("\nFile: {}", &file_name);
+
+        let res = count_file(&path);
+
+        println!("\u{001B}[38;5;82mTotal rows:\u{001B}[0m {}", res);
+    } else if path.is_dir() {
+        println!("Enter file extensions (e.g. txt,rs,class):");
+        let mut extensions_str = String::new();
+        io::stdin()
+            .read_line(&mut extensions_str)
+            .expect("Failed to read extensions");
+
+        print!("\nPath: {}Extensions: {}", &path_str, extensions_str);
+
+        let clean_extention_str = extensions_str.replace("\r", "").replace("\n", "");
+        let ext_vec: Vec<String> = clean_extention_str.split(',').map(String::from).collect();
+
+        let res = count_dir(&path, &ext_vec);
+
+        println!("\u{001B}[38;5;82mTotal rows:\u{001B}[0m {}", res);
+    } else {
+        println!(
+            "\n\u{001B}[38;5;196mCouldn't find neither file nor directory using the path\u{001B}[0m"
+        );
+    }
+
+    println!("\nPress Enter to exit...");
+    io::stdin().read_line(&mut String::new()).unwrap();
+}
+
+fn count_dir(path: &Path, ext_vec: &Vec<String>) -> usize {
+    let dir_iter = match fs::read_dir(path) {
+        Err(why) => panic!("Couldn't open directory: {}", why),
+        Ok(dir_iter) => dir_iter,
+    };
+
+    let mut counter = 0;
+    for entry in dir_iter {
+        let path = entry.unwrap().path();
+        if path.is_dir() {
+            counter = counter + count_dir(&path, &ext_vec);
+        } else {
+            let path_ext = path.extension().unwrap().to_str().unwrap().to_owned();
+            if ext_vec.contains(&path_ext) {
+                counter = counter + count_file(&path);
+            }
+        }
+    }
+
+    counter
+}
+
+fn count_file(path: &Path) -> usize {
+    let display = path.display();
+    let mut file = match File::open(&path) {
+        Err(why) => panic!("Couldn't open {}: {}", display, why),
+        Ok(file) => file,
+    };
+
+    let mut file_content = String::new();
+    match file.read_to_string(&mut file_content) {
+        Err(why) => panic!("Couldn't read {}: {}", display, why),
+        Ok(_) => (),
+    };
+
+    let re = Regex::new("\n").unwrap();
+    re.find_iter(&file_content).count()
+}
