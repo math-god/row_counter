@@ -1,11 +1,25 @@
 use regex::Regex;
+use std::error::Error;
 use std::fs;
 use std::fs::File;
 use std::io;
 use std::io::prelude::*;
 use std::path::Path;
+use windows::Win32::Foundation::HANDLE;
+use windows::Win32::System::Console::{
+    CONSOLE_MODE, ENABLE_VIRTUAL_TERMINAL_PROCESSING, GetConsoleMode, GetStdHandle,
+    STD_OUTPUT_HANDLE, SetConsoleMode,
+};
 
 fn main() {
+    match enable_ansi_escape_codes() {
+        Err(why) => println!(
+            "ANSI escape codes can't be activated. Reason: {}\n Some messages will be displayed incorrectly",
+            why
+        ),
+        Ok(_) => (),
+    };
+
     println!("Enter directory or file path:");
     let mut path_str = String::new();
     io::stdin()
@@ -83,4 +97,24 @@ fn count_file(path: &Path) -> usize {
 
     let re = Regex::new("\n").unwrap();
     re.find_iter(&file_content).count()
+}
+
+fn enable_ansi_escape_codes() -> Result<(), Box<dyn Error>> {
+    unsafe {
+        let stdout_handle: HANDLE = GetStdHandle(STD_OUTPUT_HANDLE)?;
+
+        let mut current_mode: CONSOLE_MODE = CONSOLE_MODE(0);
+        if GetConsoleMode(stdout_handle, &mut current_mode).is_err() {
+            let error: Box<dyn Error> = String::from("Failed to get console mode").into();
+            return Err(error);
+        }
+
+        let new_mode = current_mode | ENABLE_VIRTUAL_TERMINAL_PROCESSING;
+
+        if SetConsoleMode(stdout_handle, new_mode).is_err() {
+            let error: Box<dyn Error> = String::from("Failed to set console mode").into();
+            return Err(error);
+        }
+    }
+    Ok(())
 }
