@@ -45,8 +45,8 @@ fn main() {
 
         print!("\nPath: {}Extensions: {}", &path_str, extensions_str);
 
-        let clean_extention_str = extensions_str.replace("\r", "").replace("\n", "");
-        let ext_vec: Vec<String> = clean_extention_str.split(',').map(String::from).collect();
+        let clean_extensions_str = extensions_str.replace("\r", "").replace("\n", "");
+        let ext_vec: Vec<String> = clean_extensions_str.split(',').map(String::from).collect();
 
         match count_dir(&path, &ext_vec) {
             Err(why) => println!("\n\u{001B}[38;5;196m{}\u{001B}[0m", why),
@@ -77,17 +77,31 @@ fn count_dir(path: &Path, ext_vec: &Vec<String>) -> Result<usize, String> {
                 Ok(res) => counter = counter + res,
             }
         } else {
-            let path_ext = path.extension().unwrap().to_str().unwrap().to_owned();
-            if ext_vec.contains(&path_ext) {
-                match count_file(&path) {
-                    Err(why) => return Err(why),
-                    Ok(res) => counter = counter + res,
-                };
+            match count_dir_file(&path, &ext_vec) {
+                Err(why) => return Err(why),
+                Ok(res) => counter = counter + res,
             }
         }
     }
 
     Ok(counter)
+}
+
+fn count_dir_file(path: &Path, ext_vec: &Vec<String>) -> Result<usize, String> {
+    match path.extension() {
+        Some(val) => {
+            let path_ext = val.to_str().unwrap().to_owned();
+            if ext_vec.contains(&path_ext) {
+                match count_file(&path) {
+                    Err(why) => return Err(why),
+                    Ok(res) => return Ok(res),
+                };
+            }
+        }
+        _ => (),
+    }
+
+    Ok(0)
 }
 
 fn count_file(path: &Path) -> Result<usize, String> {
@@ -124,5 +138,6 @@ fn enable_ansi_escape_codes() -> Result<(), Box<dyn Error>> {
             return Err(error);
         }
     }
+    
     Ok(())
 }
