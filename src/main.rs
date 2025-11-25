@@ -32,9 +32,10 @@ fn main() {
         let file_name = path.file_name().unwrap().to_str().unwrap().to_owned();
         println!("\nFile: {}", &file_name);
 
-        let res = count_file(&path);
-
-        println!("\u{001B}[38;5;82mTotal rows:\u{001B}[0m {}", res);
+        match count_file(&path) {
+            Err(why) => println!("\n\u{001B}[38;5;196m{}\u{001B}[0m", why),
+            Ok(res) => println!("\u{001B}[38;5;82mTotal rows:\u{001B}[0m {}", res),
+        };
     } else if path.is_dir() {
         println!("Enter file extensions (e.g. txt,rs,class):");
         let mut extensions_str = String::new();
@@ -47,9 +48,10 @@ fn main() {
         let clean_extention_str = extensions_str.replace("\r", "").replace("\n", "");
         let ext_vec: Vec<String> = clean_extention_str.split(',').map(String::from).collect();
 
-        let res = count_dir(&path, &ext_vec);
-
-        println!("\u{001B}[38;5;82mTotal rows:\u{001B}[0m {}", res);
+        match count_dir(&path, &ext_vec) {
+            Err(why) => println!("\n\u{001B}[38;5;196m{}\u{001B}[0m", why),
+            Ok(res) => println!("\u{001B}[38;5;82mTotal rows:\u{001B}[0m {}", res),
+        };
     } else {
         println!(
             "\n\u{001B}[38;5;196mCouldn't find neither file nor directory using the path\u{001B}[0m"
@@ -60,9 +62,9 @@ fn main() {
     io::stdin().read_line(&mut String::new()).unwrap();
 }
 
-fn count_dir(path: &Path, ext_vec: &Vec<String>) -> usize {
+fn count_dir(path: &Path, ext_vec: &Vec<String>) -> Result<usize, String> {
     let dir_iter = match fs::read_dir(path) {
-        Err(why) => panic!("Couldn't open directory: {}", why),
+        Err(why) => return Err(format!("Couldn't open directory: {}", why)),
         Ok(dir_iter) => dir_iter,
     };
 
@@ -70,33 +72,39 @@ fn count_dir(path: &Path, ext_vec: &Vec<String>) -> usize {
     for entry in dir_iter {
         let path = entry.unwrap().path();
         if path.is_dir() {
-            counter = counter + count_dir(&path, &ext_vec);
+            match count_dir(&path, &ext_vec) {
+                Err(why) => return Err(why),
+                Ok(res) => counter = counter + res,
+            }
         } else {
             let path_ext = path.extension().unwrap().to_str().unwrap().to_owned();
             if ext_vec.contains(&path_ext) {
-                counter = counter + count_file(&path);
+                match count_file(&path) {
+                    Err(why) => return Err(why),
+                    Ok(res) => counter = counter + res,
+                };
             }
         }
     }
 
-    counter
+    Ok(counter)
 }
 
-fn count_file(path: &Path) -> usize {
+fn count_file(path: &Path) -> Result<usize, String> {
     let display = path.display();
     let mut file = match File::open(&path) {
-        Err(why) => panic!("Couldn't open {}: {}", display, why),
+        Err(why) => return Err(format!("Couldn't open {}: {}", display, why)),
         Ok(file) => file,
     };
 
     let mut file_content = String::new();
     match file.read_to_string(&mut file_content) {
-        Err(why) => panic!("Couldn't read {}: {}", display, why),
+        Err(why) => return Err(format!("Couldn't read {}: {}", display, why)),
         Ok(_) => (),
     };
 
     let re = Regex::new("\n").unwrap();
-    re.find_iter(&file_content).count()
+    Ok(re.find_iter(&file_content).count())
 }
 
 fn enable_ansi_escape_codes() -> Result<(), Box<dyn Error>> {
@@ -112,7 +120,7 @@ fn enable_ansi_escape_codes() -> Result<(), Box<dyn Error>> {
         let new_mode = current_mode | ENABLE_VIRTUAL_TERMINAL_PROCESSING;
 
         if SetConsoleMode(stdout_handle, new_mode).is_err() {
-            let error: Box<dyn Error> = String::from("Failed to set console mode").into();
+            let error: Box<dyn Error> = String::from("Failed to get console mode").into();
             return Err(error);
         }
     }
