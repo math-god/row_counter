@@ -5,6 +5,7 @@ use std::fs::File;
 use std::io;
 use std::io::prelude::*;
 use std::path::Path;
+use std::time::Instant;
 use windows::Win32::Foundation::HANDLE;
 use windows::Win32::System::Console::{
     CONSOLE_MODE, ENABLE_VIRTUAL_TERMINAL_PROCESSING, GetConsoleMode, GetStdHandle,
@@ -32,9 +33,18 @@ fn main() {
         let file_name = path.file_name().unwrap().to_str().unwrap().to_owned();
         println!("\nFile: {}", &file_name);
 
+        let now = Instant::now();
         match count_file(&path) {
-            Err(why) => println!("\n\u{001B}[38;5;196m{}\u{001B}[0m", why),
-            Ok(res) => println!("\u{001B}[38;5;82mTotal rows:\u{001B}[0m {}", res),
+            Err(why) => println!(
+                "Execution time: {} sec\n\u{001B}[38;5;196m{}\u{001B}[0m",
+                get_secs(&now),
+                why
+            ),
+            Ok(res) => println!(
+                "Execution time: {} sec\n\u{001B}[38;5;82mTotal rows:\u{001B}[0m {}",
+                get_secs(&now),
+                res
+            ),
         };
     } else if path.is_dir() {
         println!("Enter file extensions (e.g. txt,rs,class):");
@@ -48,9 +58,18 @@ fn main() {
         let clean_extensions_str = extensions_str.replace("\r", "").replace("\n", "");
         let ext_vec: Vec<String> = clean_extensions_str.split(',').map(String::from).collect();
 
+        let now = Instant::now();
         match count_dir(&path, &ext_vec) {
-            Err(why) => println!("\n\u{001B}[38;5;196m{}\u{001B}[0m", why),
-            Ok(res) => println!("\u{001B}[38;5;82mTotal rows:\u{001B}[0m {}", res),
+            Err(why) => println!(
+                "Execution time: {} sec\n\u{001B}[38;5;196m{}\u{001B}[0m",
+                get_secs(&now),
+                why
+            ),
+            Ok(res) => println!(
+                "Execution time: {} sec\n\u{001B}[38;5;82mTotal rows:\u{001B}[0m {}",
+                get_secs(&now),
+                res
+            ),
         };
     } else {
         println!(
@@ -60,6 +79,10 @@ fn main() {
 
     println!("\nPress Enter to exit...");
     io::stdin().read_line(&mut String::new()).unwrap();
+}
+
+fn get_secs(instant: &Instant) -> f64 {
+    instant.elapsed().as_millis() as f64 / 1000.0
 }
 
 fn count_dir(path: &Path, ext_vec: &Vec<String>) -> Result<usize, String> {
@@ -138,6 +161,6 @@ fn enable_ansi_escape_codes() -> Result<(), Box<dyn Error>> {
             return Err(error);
         }
     }
-    
+
     Ok(())
 }
