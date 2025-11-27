@@ -66,9 +66,10 @@ fn main() {
                 why
             ),
             Ok(res) => println!(
-                "Execution time: {} sec\n\u{001B}[38;5;82mTotal rows:\u{001B}[0m {}",
+                "Execution time: {} sec\n\u{001B}[38;5;82mTotal rows:\u{001B}[0m {}\n\u{001B}[38;5;82mTotal files:\u{001B}[0m {}",
                 get_secs(&now),
-                res
+                res.rows,
+                res.files
             ),
         };
     } else {
@@ -85,29 +86,39 @@ fn get_secs(instant: &Instant) -> f64 {
     instant.elapsed().as_millis() as f64 / 1000.0
 }
 
-fn count_dir(path: &Path, ext_vec: &Vec<String>) -> Result<usize, String> {
+fn count_dir(path: &Path, ext_vec: &Vec<String>) -> Result<Total, String> {
     let dir_iter = match fs::read_dir(path) {
         Err(why) => return Err(format!("Couldn't open directory: {}", why)),
         Ok(dir_iter) => dir_iter,
     };
 
-    let mut counter = 0;
+    let mut row_counter = 0;
+    let mut file_counter = 0;
     for entry in dir_iter {
         let path = entry.unwrap().path();
         if path.is_dir() {
             match count_dir(&path, &ext_vec) {
                 Err(why) => return Err(why),
-                Ok(res) => counter = counter + res,
+                Ok(res) => {
+                    row_counter = row_counter + res.rows;
+                    file_counter = file_counter + res.files;
+                }
             }
         } else {
             match count_dir_file(&path, &ext_vec) {
                 Err(why) => return Err(why),
-                Ok(res) => counter = counter + res,
+                Ok(res) => {
+                    row_counter = row_counter + res;
+                    file_counter = file_counter + 1;
+                }
             }
         }
     }
 
-    Ok(counter)
+    Ok(Total {
+        rows: row_counter,
+        files: file_counter,
+    })
 }
 
 fn count_dir_file(path: &Path, ext_vec: &Vec<String>) -> Result<usize, String> {
@@ -163,4 +174,9 @@ fn enable_ansi_escape_codes() -> Result<(), Box<dyn Error>> {
     }
 
     Ok(())
+}
+
+struct Total {
+    rows: usize,
+    files: usize,
 }
