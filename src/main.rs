@@ -5,12 +5,24 @@ use std::fs::File;
 use std::io;
 use std::io::prelude::*;
 use std::path::Path;
+use std::sync::mpsc;
+use std::sync::mpsc::Receiver;
+use std::thread;
+use std::time::Duration;
 use std::time::Instant;
 use windows::Win32::Foundation::HANDLE;
 use windows::Win32::System::Console::{
     CONSOLE_MODE, ENABLE_VIRTUAL_TERMINAL_PROCESSING, GetConsoleMode, GetStdHandle,
     STD_OUTPUT_HANDLE, SetConsoleMode,
 };
+
+const SET_CURSOR_VISIBLE: &str = "\u{001B}[?25h";
+const SET_CURSOR_INVISIBLE: &str = "\u{001B}[?25l";
+const BEGINNING_OF_PREV_LINE: &str = "\u{001B}[1F";
+const ERASE_LINE: &str = "\u{001B}[K";
+const RESET_COLOR: &str = "\u{001B}[0m";
+const RED_COLOR: &str = "\u{001B}[38;5;196m";
+const GREEN_COLOR: &str = "\u{001B}[38;5;82m";
 
 fn main() {
     match enable_ansi_escape_codes() {
@@ -28,6 +40,7 @@ fn main() {
         .expect("Failed to read path");
 
     let path = Path::new(path_str.trim());
+    let (tx, rx) = mpsc::channel();
 
     if path.is_file() {
         let file_name = path.file_name().unwrap().to_str().unwrap().to_owned();
@@ -35,16 +48,8 @@ fn main() {
 
         let now = Instant::now();
         match count_file(&path) {
-            Err(why) => println!(
-                "Execution time: {} sec\n\u{001B}[38;5;196m{}\u{001B}[0m",
-                get_secs(&now),
-                why
-            ),
-            Ok(res) => println!(
-                "Execution time: {} sec\n\u{001B}[38;5;82mTotal rows:\u{001B}[0m {}",
-                get_secs(&now),
-                res
-            ),
+            Err(why) => println!("{}", build_err(get_secs(&now), why)),
+            Ok(res) => println!("{}", build_ok_file(get_secs(&now), res)),
         };
     } else if path.is_dir() {
         println!("Enter file extensions (e.g. txt,rs,class):");
@@ -58,32 +63,57 @@ fn main() {
         let clean_extensions_str = extensions_str.replace("\r", "").replace("\n", "");
         let ext_vec: Vec<String> = clean_extensions_str.split(',').map(String::from).collect();
 
+        thread::spawn(move || show_progress(&rx));
+
         let now = Instant::now();
         match count_dir(&path, &ext_vec) {
-            Err(why) => println!(
-                "Execution time: {} sec\n\u{001B}[38;5;196m{}\u{001B}[0m",
-                get_secs(&now),
-                why
-            ),
-            Ok(res) => println!(
-                "Execution time: {} sec\n\u{001B}[38;5;82mTotal rows:\u{001B}[0m {}\n\u{001B}[38;5;82mTotal files:\u{001B}[0m {}",
-                get_secs(&now),
-                res.rows,
-                res.files
-            ),
+            Err(why) => println!("{}", build_err(get_secs(&now), why)),
+            Ok(res) => println!("{}", build_ok_dir(get_secs(&now), res.rows, res.files)),
         };
     } else {
         println!(
-            "\n\u{001B}[38;5;196mCouldn't find neither file nor directory using the path\u{001B}[0m"
+            "{}{}{}",
+            RED_COLOR, "\nCouldn't find neither file nor directory using the path", RESET_COLOR
         );
     }
 
+    let _ = tx.send(true);
+
+    print!("{}", SET_CURSOR_VISIBLE);
     println!("\nPress Enter to exit...");
     io::stdin().read_line(&mut String::new()).unwrap();
 }
 
 fn get_secs(instant: &Instant) -> f64 {
     instant.elapsed().as_millis() as f64 / 1000.0
+}
+
+fn show_progress(rx: &Receiver<bool>) {
+    let mut counter = 0;
+    loop {
+        match rx.try_recv() {
+            Ok(stop_printing) => {
+                if stop_printing {
+                    return;
+                }
+            }
+            _ => (),
+        }
+
+        print!("{}", SET_CURSOR_INVISIBLE);
+        println!(
+            "In progress{}",
+            ".".repeat(counter) + BEGINNING_OF_PREV_LINE
+        );
+        counter = counter + 1;
+
+        if counter == 4 {
+            counter = 0;
+        }
+        thread::sleep(Duration::from_secs(1));
+
+        print!("{}\r", ERASE_LINE);
+    }
 }
 
 fn count_dir(path: &Path, ext_vec: &Vec<String>) -> Result<Total, String> {
@@ -174,6 +204,27 @@ fn enable_ansi_escape_codes() -> Result<(), Box<dyn Error>> {
     }
 
     Ok(())
+}
+
+fn build_err(exec_time: f64, err_mes: String) -> String {
+    format!(
+        "Execution time: {} sec\n{}{}{}",
+        exec_time, RED_COLOR, err_mes, RESET_COLOR
+    )
+}
+
+fn build_ok_file(exec_time: f64, row_count: usize) -> String {
+    format!(
+        "Execution time: {} sec\n{}Total rows: {}{}",
+        exec_time, GREEN_COLOR, RESET_COLOR, row_count
+    )
+}
+
+fn build_ok_dir(exec_time: f64, row_count: usize, file_count: usize) -> String {
+    format!(
+        "Execution time: {} sec\n{}Total rows: {}{}\n{}Total files: {}{}",
+        exec_time, GREEN_COLOR, RESET_COLOR, row_count, GREEN_COLOR, RESET_COLOR, file_count
+    )
 }
 
 struct Total {
