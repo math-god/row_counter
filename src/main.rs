@@ -138,7 +138,10 @@ fn count_dir(path: &Path, ext_vec: &Vec<String>) -> Result<Total, String> {
             match count_dir_file(&path, &ext_vec) {
                 Err(why) => return Err(why),
                 Ok(res) => {
-                    row_counter = row_counter + res;
+                    if res.ignore {
+                        continue;
+                    }
+                    row_counter = row_counter + res.rows;
                     file_counter = file_counter + 1;
                 }
             }
@@ -151,21 +154,29 @@ fn count_dir(path: &Path, ext_vec: &Vec<String>) -> Result<Total, String> {
     })
 }
 
-fn count_dir_file(path: &Path, ext_vec: &Vec<String>) -> Result<usize, String> {
+fn count_dir_file(path: &Path, ext_vec: &Vec<String>) -> Result<FileTotal, String> {
     match path.extension() {
         Some(val) => {
             let path_ext = val.to_str().unwrap().to_owned();
             if ext_vec.contains(&path_ext) {
                 match count_file(&path) {
                     Err(why) => return Err(why),
-                    Ok(res) => return Ok(res),
+                    Ok(res) => {
+                        return Ok(FileTotal {
+                            rows: res,
+                            ignore: false,
+                        });
+                    }
                 };
             }
         }
         _ => (),
     }
 
-    Ok(0)
+    Ok(FileTotal {
+        rows: 0,
+        ignore: true,
+    })
 }
 
 fn count_file(path: &Path) -> Result<usize, String> {
@@ -230,4 +241,9 @@ fn build_ok_dir(exec_time: f64, row_count: usize, file_count: usize) -> String {
 struct Total {
     rows: usize,
     files: usize,
+}
+
+struct FileTotal {
+    rows: usize,
+    ignore: bool,
 }
