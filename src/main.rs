@@ -196,7 +196,7 @@ fn enable_ansi_escape_codes() -> Result<(), Box<dyn Error>> {
         let new_mode = current_mode | ENABLE_VIRTUAL_TERMINAL_PROCESSING;
 
         if SetConsoleMode(stdout_handle, new_mode).is_err() {
-            let error: Box<dyn Error> = String::from("Failed to get console mode").into();
+            let error: Box<dyn Error> = String::from("Failed to set console mode").into();
             return Err(error);
         }
     }
