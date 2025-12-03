@@ -25,13 +25,10 @@ const RED_COLOR: &str = "\u{001B}[38;5;196m";
 const GREEN_COLOR: &str = "\u{001B}[38;5;82m";
 
 fn main() {
-    match enable_ansi_escape_codes() {
-        Err(why) => println!(
-            "ANSI escape codes can't be activated. Reason: {}\n Some messages will be displayed incorrectly",
-            why
-        ),
-        Ok(_) => (),
-    };
+    if let Err(why) = enable_ansi_escape_codes() { println!(
+        "ANSI escape codes can't be activated. Reason: {}\n Some messages will be displayed incorrectly",
+        why
+    ) };
 
     println!("Enter directory or file path:");
     let mut path_str = String::new();
@@ -47,7 +44,7 @@ fn main() {
         println!("\nFile: {}", &file_name);
 
         let now = Instant::now();
-        match count_file(&path) {
+        match count_file(path) {
             Err(why) => println!("{}", build_err(get_secs(&now), why)),
             Ok(res) => println!("{}", build_ok_file(get_secs(&now), res)),
         };
@@ -66,14 +63,14 @@ fn main() {
         thread::spawn(move || show_progress(&rx));
 
         let now = Instant::now();
-        match count_dir(&path, &ext_vec) {
+        match count_dir(path, &ext_vec) {
             Err(why) => println!("{}", build_err(get_secs(&now), why)),
             Ok(res) => println!("{}", build_ok_dir(get_secs(&now), res.rows, res.files)),
         };
     } else {
         println!(
-            "{}{}{}",
-            RED_COLOR, "\nCouldn't find neither file nor directory using the path", RESET_COLOR
+            "{}\nCouldn't find neither file nor directory using the path{}",
+            RED_COLOR, RESET_COLOR
         );
     }
 
@@ -91,21 +88,17 @@ fn get_secs(instant: &Instant) -> f64 {
 fn show_progress(rx: &Receiver<bool>) {
     let mut counter = 0;
     loop {
-        match rx.try_recv() {
-            Ok(stop_printing) => {
-                if stop_printing {
-                    return;
-                }
+        if let Ok(stop_printing) = rx.try_recv()
+            && stop_printing {
+                return;
             }
-            _ => (),
-        }
 
         print!("{}", SET_CURSOR_INVISIBLE);
         println!(
             "In progress{}",
             ".".repeat(counter) + BEGINNING_OF_PREV_LINE
         );
-        counter = counter + 1;
+        counter += 1;
 
         if counter == 4 {
             counter = 0;
@@ -127,22 +120,22 @@ fn count_dir(path: &Path, ext_vec: &Vec<String>) -> Result<Total, String> {
     for entry in dir_iter {
         let path = entry.unwrap().path();
         if path.is_dir() {
-            match count_dir(&path, &ext_vec) {
+            match count_dir(&path, ext_vec) {
                 Err(why) => return Err(why),
                 Ok(res) => {
-                    row_counter = row_counter + res.rows;
-                    file_counter = file_counter + res.files;
+                    row_counter += res.rows;
+                    file_counter += res.files;
                 }
             }
         } else {
-            match count_dir_file(&path, &ext_vec) {
+            match count_dir_file(&path, ext_vec) {
                 Err(why) => return Err(why),
                 Ok(res) => {
                     if res.ignore {
                         continue;
                     }
-                    row_counter = row_counter + res.rows;
-                    file_counter = file_counter + 1;
+                    row_counter += res.rows;
+                    file_counter += 1;
                 }
             }
         }
@@ -155,22 +148,19 @@ fn count_dir(path: &Path, ext_vec: &Vec<String>) -> Result<Total, String> {
 }
 
 fn count_dir_file(path: &Path, ext_vec: &Vec<String>) -> Result<FileTotal, String> {
-    match path.extension() {
-        Some(val) => {
-            let path_ext = val.to_str().unwrap().to_owned();
-            if ext_vec.contains(&path_ext) {
-                match count_file(&path) {
-                    Err(why) => return Err(why),
-                    Ok(res) => {
-                        return Ok(FileTotal {
-                            rows: res,
-                            ignore: false,
-                        });
-                    }
-                };
-            }
+    if let Some(val) = path.extension() {
+        let path_ext = val.to_str().unwrap().to_owned();
+        if ext_vec.contains(&path_ext) {
+            match count_file(path) {
+                Err(why) => return Err(why),
+                Ok(res) => {
+                    return Ok(FileTotal {
+                        rows: res,
+                        ignore: false,
+                    });
+                }
+            };
         }
-        _ => (),
     }
 
     Ok(FileTotal {
@@ -181,16 +171,13 @@ fn count_dir_file(path: &Path, ext_vec: &Vec<String>) -> Result<FileTotal, Strin
 
 fn count_file(path: &Path) -> Result<usize, String> {
     let display = path.display();
-    let mut file = match File::open(&path) {
+    let mut file = match File::open(path) {
         Err(why) => return Err(format!("Couldn't open {}: {}", display, why)),
         Ok(file) => file,
     };
 
     let mut file_content = String::new();
-    match file.read_to_string(&mut file_content) {
-        Err(why) => return Err(format!("Couldn't read {}: {}", display, why)),
-        Ok(_) => (),
-    };
+    if let Err(why) = file.read_to_string(&mut file_content) { return Err(format!("Couldn't read {}: {}", display, why)) };
 
     let re = Regex::new("\n").unwrap();
     Ok(re.find_iter(&file_content).count())
