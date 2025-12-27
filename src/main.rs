@@ -22,13 +22,13 @@ use windows::Win32::System::Console::{
 const SET_CURSOR_VISIBLE: &str = "\u{001B}[?25h";
 const SET_CURSOR_INVISIBLE: &str = "\u{001B}[?25l";
 const BEGINNING_OF_PREV_LINE: &str = "\u{001B}[1F";
-const ERASE_LINE: &str = "\u{001B}[K";
+const ERASE_LINE: &str = "\u{001B}[2K";
 const RESET_COLOR: &str = "\u{001B}[0m";
 const RED_COLOR: &str = "\u{001B}[38;5;196m";
 const YELLOW_COLOR: &str = "\u{001B}[38;5;185m";
 const GREEN_COLOR: &str = "\u{001B}[38;5;82m";
 
-const MULTITHREADING_MIN_CONDITION: i32 = 400_000;
+//const MULTITHREADING_MIN_CONDITION: i32 = 400_000;
 
 fn main() {
     if let Err(why) = enable_ansi_escape_codes() {
@@ -44,8 +44,13 @@ fn main() {
         .read_line(&mut path_str)
         .expect("Failed to read path");
 
-    let path = Path::new(path_str.trim());
+    println!("Enter file extensions (e.g. txt,rs,class):");
+    let mut extensions_str = String::new();
+    io::stdin()
+        .read_line(&mut extensions_str)
+        .expect("Failed to read extensions");
 
+    let path = Path::new(path_str.trim());
     if path.is_file() {
         let file_name = path.file_name().unwrap().to_str().unwrap().to_owned();
         println!("\nFile: {}", &file_name);
@@ -63,16 +68,19 @@ fn main() {
                 0
             }
         };
-        if cores_num == 0 {
-            println!(
+
+        if cores_num < 2 {
+            if cores_num == 0 {
+                println!(
                 "{}",
                 build_warning(
-                    "Couldn't determine the number of available cores of the system\nOnly single thread processing available\n".to_string()
+                    "Couldn't determine the number of available cores of the system\nOnly single-threaded processing available".to_string()
                 )
             );
-            start_single_thread(&path_str, &path);
-        } else if cores_num == 1 {
-            start_single_thread(&path_str, &path);
+            }
+
+            print!("\nPath: {}Extensions: {}", path_str, extensions_str);
+            start_single_thread(path, &extensions_str);
         } else {
             println!(
                 "The system was found as multithreading. If there are many files in the directory, you can consider using multi-threaded processing [y] to reduce execution time or single-threaded processing [n] as a default execution configuration"
@@ -90,26 +98,30 @@ fn main() {
                     Ok(res) => res,
                 };
                 let _ = tx.send(true);
+                thread::sleep(Duration::from_secs(1));
 
                 if total_files_counter < 0 {
                     exit();
                     return;
                 } else if total_files_counter == 0 {
-                    println!("Found no files in specified directory");
+                    println!(
+                        "{}",
+                        build_warning("Found no files in specified directory".to_string())
+                    );
                     exit();
                     return;
-                } else if total_files_counter < MULTITHREADING_MIN_CONDITION {
-                    start_single_thread(&path_str, &path);
                 } else {
+                    print!("\nPath: {}Extensions: {}", &path_str, extensions_str);
                     start_multi_thread(
-                        &path_str,
-                        &path,
+                        path,
                         cores_num,
                         total_files_counter.try_into().unwrap(),
+                        &extensions_str,
                     );
                 }
             } else {
-                start_single_thread(&path_str, &path);
+                println!("\nPath: {}Extensions: {}", &path_str, extensions_str);
+                start_single_thread(path, &extensions_str);
             }
         }
     } else {
@@ -163,7 +175,7 @@ fn show_awaiting_message(aw_type: AwaitingType, rx: &Receiver<bool>) {
         if let Ok(stop_printing) = rx.try_recv()
             && stop_printing
         {
-            println!("{}", SET_CURSOR_VISIBLE);
+            print!("{}", SET_CURSOR_VISIBLE);
             return;
         }
 
@@ -179,19 +191,11 @@ fn show_awaiting_message(aw_type: AwaitingType, rx: &Receiver<bool>) {
         }
         thread::sleep(Duration::from_secs(1));
 
-        print!("{}\r", ERASE_LINE);
+        print!("{}", ERASE_LINE);
     }
 }
 
-fn start_single_thread(path_str: &str, path: &Path) {
-    println!("Enter file extensions (e.g. txt,rs,class):");
-    let mut extensions_str = String::new();
-    io::stdin()
-        .read_line(&mut extensions_str)
-        .expect("Failed to read extensions");
-
-    print!("\nPath: {}Extensions: {}", &path_str, extensions_str);
-
+fn start_single_thread(path: &Path, extensions_str: &str) {
     let clean_extensions_str = extensions_str.trim();
     let ext_vec: Vec<String> = clean_extensions_str.split(',').map(String::from).collect();
 
@@ -205,17 +209,10 @@ fn start_single_thread(path_str: &str, path: &Path) {
     };
 
     let _ = tx.send(true);
+    thread::sleep(Duration::from_secs(1));
 }
 
-fn start_multi_thread(path_str: &str, path: &Path, cores: usize, files: usize) {
-    println!("Enter file extensions (e.g. txt,rs,class):");
-    let mut extensions_str = String::new();
-    io::stdin()
-        .read_line(&mut extensions_str)
-        .expect("Failed to read extensions");
-
-    print!("\nPath: {}Extensions: {}", &path_str, extensions_str);
-
+fn start_multi_thread(path: &Path, cores: usize, files: usize, extensions_str: &str) {
     let clean_extensions_str = extensions_str.trim();
     let ext_vec: Vec<String> = clean_extensions_str.split(',').map(String::from).collect();
 
@@ -226,7 +223,7 @@ fn start_multi_thread(path_str: &str, path: &Path, cores: usize, files: usize) {
     let (tx_th, rx_th) = mpsc::channel();
     let batch_size = files / cores;
     println!("Batch: {} Threads: {}", batch_size, cores);
-    match extract_path_vec(&path, files) {
+    match extract_path_vec(path, files) {
         Ok(paths) => {
             let paths_ptr = Arc::new(paths);
             for i in 0..cores {
@@ -234,12 +231,17 @@ fn start_multi_thread(path_str: &str, path: &Path, cores: usize, files: usize) {
                 let ext_vec_cln = ext_vec.clone();
                 let paths_ptr_cln = paths_ptr.clone();
                 if i < cores - 1 {
+                    let from = batch_size * i;
+                    let to = batch_size * (i + 1);
                     thread::spawn(move || {
-                        count_dirs(paths_ptr_cln, batch_size, i, &ext_vec_cln, &tx_cln)
+                        count_dirs(paths_ptr_cln, from, to, &ext_vec_cln, &tx_cln)
                     });
                 } else {
+                    let remainder = files % cores;
+                    let from = batch_size * i;
+                    let to = batch_size * (i + 1) + remainder;
                     thread::spawn(move || {
-                        count_dirs_last(paths_ptr_cln, batch_size, i, &ext_vec_cln, &tx_cln, files)
+                        count_dirs(paths_ptr_cln, from, to, &ext_vec_cln, &tx_cln)
                     });
                 }
             }
@@ -270,6 +272,7 @@ fn start_multi_thread(path_str: &str, path: &Path, cores: usize, files: usize) {
     }
 
     let _ = tx_aw.send(true);
+    thread::sleep(Duration::from_secs(1));
 
     println!(
         "{}",
@@ -305,49 +308,17 @@ fn extract_path_vec(path: &Path, files: usize) -> Result<Vec<PathBuf>, String> {
 
 fn count_dirs(
     paths_vec: Arc<Vec<PathBuf>>,
-    batch_size: usize,
-    thread_num: usize,
+    from: usize,
+    to: usize,
     ext_vec: &Vec<String>,
     tx: &Sender<Result<Total, String>>,
 ) {
     let mut row_counter = 0;
     let mut file_counter = 0;
 
-    let paths = &paths_vec[batch_size * thread_num..batch_size * (thread_num + 1)];
+    let paths = &paths_vec[from..to];
     for path in paths {
-        match count_dir_file(&path, ext_vec) {
-            Err(why) => {
-                let _ = tx.send(Err(why));
-            }
-            Ok(res) => {
-                if res.ignore {
-                    continue;
-                }
-                row_counter += res.rows;
-                file_counter += 1;
-            }
-        }
-    }
-
-    let _ = tx.send(Ok(Total {
-        rows: row_counter,
-        files: file_counter,
-    }));
-}
-
-fn count_dirs_last(
-    paths_vec: Arc<Vec<PathBuf>>,
-    batch_size: usize,
-    thread_num: usize,
-    ext_vec: &Vec<String>,
-    tx: &Sender<Result<Total, String>>,
-    files: usize,
-) {
-    let mut row_counter = 0;
-    let mut file_counter = 0;
-    let paths = &paths_vec[batch_size * thread_num..files];
-    for path in paths {
-        match count_dir_file(&path, ext_vec) {
+        match count_dir_file(path, ext_vec) {
             Err(why) => {
                 let _ = tx.send(Err(why));
             }
