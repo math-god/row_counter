@@ -51,83 +51,84 @@ fn main() {
         .expect("Failed to read extensions");
 
     let path = Path::new(path_str.trim());
+
     if path.is_file() {
         let file_name = path.file_name().unwrap().to_str().unwrap().to_owned();
         println!("\nFile: {}", &file_name);
 
         let now = Instant::now();
         match count_file(path) {
-            Err(why) => println!("{}", build_err(get_secs(&now), why)),
+            Err(why) => println!("{}", build_err_with_time(get_secs(&now), &why)),
             Ok(res) => println!("{}", build_ok_file(get_secs(&now), res)),
         };
     } else if path.is_dir() {
-        let cores_num = match thread::available_parallelism() {
-            Ok(res) => res.get(),
+        let (tx, rx) = mpsc::channel();
+        thread::spawn(move || show_awaiting_message(AwaitingType::FileCounting, &rx));
+        let total_files_counter = match count_all_files(path) {
             Err(why) => {
-                println!("{}", why);
-                0
-            }
-        };
-
-        if cores_num < 2 {
-            if cores_num == 0 {
-                println!(
-                "{}",
-                build_warning(
-                    "Couldn't determine the number of available cores of the system\nOnly single-threaded processing available".to_string()
-                )
-            );
-            }
-
-            print!("\nPath: {}Extensions: {}", path_str, extensions_str);
-            start_single_thread(path, &extensions_str);
-        } else {
-            println!(
-                "The system was found as multithreading. If there are many files in the directory, you can consider using multi-threaded processing [y] to reduce execution time or single-threaded processing [n] as a default execution configuration"
-            );
-            let mult_th_answer = read_answer();
-
-            if mult_th_answer {
-                let (tx, rx) = mpsc::channel();
-                thread::spawn(move || show_awaiting_message(AwaitingType::FileCounting, &rx));
-                let total_files_counter = match count_all_files(path) {
-                    Err(why) => {
-                        println!("{}", build_err_no_time(why));
-                        0 - 1
-                    }
-                    Ok(res) => res,
-                };
                 let _ = tx.send(true);
                 thread::sleep(Duration::from_secs(1));
 
-                if total_files_counter < 0 {
-                    exit();
-                    return;
-                } else if total_files_counter == 0 {
-                    println!(
-                        "{}",
-                        build_warning("Found no files in specified directory".to_string())
-                    );
+                println!("{}", build_err(&why));
+                exit();
+                return;
+            }
+            Ok(res) => {
+                if res == 0 {
+                    let _ = tx.send(true);
+                    thread::sleep(Duration::from_secs(1));
+
+                    println!("{}", build_warning("Found no files in specified directory"));
                     exit();
                     return;
                 } else {
-                    print!("\nPath: {}Extensions: {}", &path_str, extensions_str);
-                    start_multi_thread(
-                        path,
-                        cores_num,
-                        total_files_counter.try_into().unwrap(),
-                        &extensions_str,
-                    );
+                    res
                 }
-            } else {
-                println!("\nPath: {}Extensions: {}", &path_str, extensions_str);
-                start_single_thread(path, &extensions_str);
             }
-        }
+        };
+        let _ = tx.send(true);
+        thread::sleep(Duration::from_secs(1));
+
+        match thread::available_parallelism() {
+            Ok(res) => {
+                let cores_num = res.get();
+                if cores_num == 1 {
+                    print!("\nPath: {}Extensions: {}", path_str, extensions_str);
+                    start_single_thread(path, &extensions_str);
+                } else {
+                    println!(
+                        "The system was found as multithreading. If there are many files in the directory, you can consider using multi-threaded processing [y] to reduce execution time or single-threaded processing [n] as a default execution configuration"
+                    );
+                    let mult_th_answer = read_answer();
+
+                    if mult_th_answer {
+                        print!("\nPath: {}Extensions: {}", &path_str, extensions_str);
+                        start_multi_thread(
+                            path,
+                            cores_num,
+                            total_files_counter,
+                            &extensions_str,
+                        );
+                    } else {
+                        println!("\nPath: {}Extensions: {}", &path_str, extensions_str);
+                        start_single_thread(path, &extensions_str);
+                    }
+                }
+            }
+            Err(why) => {
+                println!(
+                    "{} Reason: {}",
+                    build_warning(
+                        "Couldn't determine the number of available cores of the system\nOnly single-threaded processing available"
+                    ),
+                    build_err(&why.to_string())
+                );
+            }
+        };
     } else {
         println!(
-            "{}\nCouldn't find neither file nor directory using the path{}",
-            RED_COLOR, RESET_COLOR
+            "{}",
+            build_err("Couldn't find neither file nor directory using the path")
         );
     }
 
@@ -204,7 +205,7 @@ fn start_single_thread(path: &Path, extensions_str: &str) {
     let (tx, rx) = mpsc::channel();
     thread::spawn(move || show_awaiting_message(AwaitingType::Progress, &rx));
     match count_dir(path, &ext_vec) {
-        Err(why) => println!("{}", build_err(get_secs(&now), why)),
+        Err(why) => println!("{}", build_err_with_time(get_secs(&now), &why)),
         Ok(res) => println!("{}", build_ok_dir(get_secs(&now), res.rows, res.files)),
     };
 
@@ -414,7 +415,7 @@ fn count_file(path: &Path) -> Result<usize, String> {
     Ok(re.find_iter(&file_content).count())
 }
 
-fn count_all_files(path: &Path) -> Result<i32, String> {
+fn count_all_files(path: &Path) -> Result<usize, String> {
     let dir_iter = match fs::read_dir(path) {
         Err(why) => return Err(format!("Couldn't open directory: {}", why)),
         Ok(dir_iter) => dir_iter,
@@ -460,18 +461,18 @@ fn enable_ansi_escape_codes() -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
-fn build_err(exec_time: f64, err_mes: String) -> String {
+fn build_err_with_time(exec_time: f64, err_mes: &str) -> String {
     format!(
         "Execution time: {} sec\n{}{}{}",
         exec_time, RED_COLOR, err_mes, RESET_COLOR
     )
 }
 
-fn build_err_no_time(err_mes: String) -> String {
+fn build_err(err_mes: &str) -> String {
     format!("\n{}{}{}", RED_COLOR, err_mes, RESET_COLOR)
 }
 
-fn build_warning(warn_mes: String) -> String {
+fn build_warning(warn_mes: &str) -> String {
     format!("\n{}{}{}", YELLOW_COLOR, warn_mes, RESET_COLOR)
 }
 
