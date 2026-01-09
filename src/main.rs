@@ -44,12 +44,6 @@ fn main() {
         .read_line(&mut path_str)
         .expect("Failed to read path");
 
-    println!("Enter file extensions (e.g. txt,rs,class):");
-    let mut extensions_str = String::new();
-    io::stdin()
-        .read_line(&mut extensions_str)
-        .expect("Failed to read extensions");
-
     let path = Path::new(path_str.trim());
 
     if path.is_file() {
@@ -57,11 +51,20 @@ fn main() {
         println!("\nFile: {}", &file_name);
 
         let now = Instant::now();
-        match count_file(path) {
+        match count_file_rows(path) {
             Err(why) => println!("{}", build_err_with_time(get_secs(&now), &why)),
             Ok(res) => println!("{}", build_ok_file(get_secs(&now), res)),
         };
     } else if path.is_dir() {
+        println!("Enter file extensions (e.g. txt,rs,class):");
+        let mut extensions_str = String::new();
+        io::stdin()
+            .read_line(&mut extensions_str)
+            .expect("Failed to read extensions");
+
+        let clean_extensions_str = extensions_str.trim();
+        let ext_vec: Vec<String> = clean_extensions_str.split(',').map(String::from).collect();
+
         let (tx, rx) = mpsc::channel();
         thread::spawn(move || show_awaiting_message(AwaitingType::FileCounting, &rx));
         let total_files_counter = match count_all_files(path) {
@@ -94,7 +97,7 @@ fn main() {
                 let cores_num = res.get();
                 if cores_num == 1 {
                     print!("\nPath: {}Extensions: {}", path_str, extensions_str);
-                    start_single_thread(path, &extensions_str);
+                    start_single_thread(path, &ext_vec);
                 } else {
                     println!(
                         "The system was found as multithreading. If there are many files in the directory, you can consider using multi-threaded processing [y] to reduce execution time or single-threaded processing [n] as a default execution configuration"
@@ -103,15 +106,10 @@ fn main() {
 
                     if mult_th_answer {
                         print!("\nPath: {}Extensions: {}", &path_str, extensions_str);
-                        start_multi_thread(
-                            path,
-                            cores_num,
-                            total_files_counter,
-                            &extensions_str,
-                        );
+                        start_multi_thread(path, cores_num, total_files_counter, &ext_vec);
                     } else {
                         println!("\nPath: {}Extensions: {}", &path_str, extensions_str);
-                        start_single_thread(path, &extensions_str);
+                        start_single_thread(path, &ext_vec);
                     }
                 }
             }
@@ -196,15 +194,11 @@ fn show_awaiting_message(aw_type: AwaitingType, rx: &Receiver<bool>) {
     }
 }
 
-fn start_single_thread(path: &Path, extensions_str: &str) {
-    let clean_extensions_str = extensions_str.trim();
-    let ext_vec: Vec<String> = clean_extensions_str.split(',').map(String::from).collect();
-
+fn start_single_thread(path: &Path, ext_vec: &Vec<String>) {
     let now = Instant::now();
-
     let (tx, rx) = mpsc::channel();
     thread::spawn(move || show_awaiting_message(AwaitingType::Progress, &rx));
-    match count_dir(path, &ext_vec) {
+    match count_dir(path, ext_vec) {
         Err(why) => println!("{}", build_err_with_time(get_secs(&now), &why)),
         Ok(res) => println!("{}", build_ok_dir(get_secs(&now), res.rows, res.files)),
     };
@@ -213,36 +207,34 @@ fn start_single_thread(path: &Path, extensions_str: &str) {
     thread::sleep(Duration::from_secs(1));
 }
 
-fn start_multi_thread(path: &Path, cores: usize, files: usize, extensions_str: &str) {
-    let clean_extensions_str = extensions_str.trim();
-    let ext_vec: Vec<String> = clean_extensions_str.split(',').map(String::from).collect();
-
+fn start_multi_thread(path: &Path, cores_num: usize, files_num: usize, ext_vec: &Vec<String>) {
     let now = Instant::now();
     let (tx_aw, rx_aw) = mpsc::channel();
     thread::spawn(move || show_awaiting_message(AwaitingType::Progress, &rx_aw));
 
     let (tx_th, rx_th) = mpsc::channel();
-    let batch_size = files / cores;
-    println!("Batch: {} Threads: {}", batch_size, cores);
-    match extract_path_vec(path, files) {
+    let batch_size = files_num / cores_num;
+    println!("Batch: {} Threads: {}", batch_size, cores_num);
+
+    match init_path_vec(path, files_num) {
         Ok(paths) => {
             let paths_ptr = Arc::new(paths);
-            for i in 0..cores {
+            for i in 0..cores_num {
                 let tx_cln = tx_th.clone();
                 let ext_vec_cln = ext_vec.clone();
                 let paths_ptr_cln = paths_ptr.clone();
-                if i < cores - 1 {
+                if i < cores_num - 1 {
                     let from = batch_size * i;
                     let to = batch_size * (i + 1);
                     thread::spawn(move || {
-                        count_dirs(paths_ptr_cln, from, to, &ext_vec_cln, &tx_cln)
+                        count_dir_batched(paths_ptr_cln, from, to, &ext_vec_cln, &tx_cln)
                     });
                 } else {
-                    let remainder = files % cores;
+                    let remainder = files_num % cores_num;
                     let from = batch_size * i;
                     let to = batch_size * (i + 1) + remainder;
                     thread::spawn(move || {
-                        count_dirs(paths_ptr_cln, from, to, &ext_vec_cln, &tx_cln)
+                        count_dir_batched(paths_ptr_cln, from, to, &ext_vec_cln, &tx_cln)
                     });
                 }
             }
@@ -267,7 +259,7 @@ fn start_multi_thread(path: &Path, cores: usize, files: usize, extensions_str: &
             Err(_why) => {}
         }
         thread::sleep(Duration::from_millis(700));
-        if threads == cores {
+        if threads == cores_num {
             break;
         }
     }
@@ -281,33 +273,30 @@ fn start_multi_thread(path: &Path, cores: usize, files: usize, extensions_str: &
     )
 }
 
-fn extract_path_vec(path: &Path, files: usize) -> Result<Vec<PathBuf>, String> {
-    let mut vec = Vec::with_capacity(files);
+fn init_path_vec(path: &Path, files_num: usize) -> Result<Vec<PathBuf>, String> {
+    let mut vec = Vec::with_capacity(files_num);
     let dir_iter = match fs::read_dir(path) {
         Err(why) => return Err(format!("Couldn't open directory: {}", why)),
         Ok(dir_iter) => dir_iter,
     };
+
     for entry in dir_iter {
         let path = entry.unwrap().path();
         if path.is_dir() {
-            match count_all_files(&path) {
-                Ok(file_num) => match extract_path_vec(&path, file_num.try_into().unwrap()) {
-                    Err(why) => return Err(why),
-                    Ok(mut res) => {
-                        vec.append(&mut res);
-                    }
-                },
+            let files_num_in_dir = count_files_in_dir(&path)?;
+            match init_path_vec(&path, files_num_in_dir) {
                 Err(why) => return Err(why),
-            }
+                Ok(mut res) => vec.append(&mut res),
+            };
         } else {
-            vec.push(path.to_path_buf())
+            vec.push(path.to_path_buf());
         }
     }
 
     Ok(vec)
 }
 
-fn count_dirs(
+fn count_dir_batched(
     paths_vec: Arc<Vec<PathBuf>>,
     from: usize,
     to: usize,
@@ -319,7 +308,7 @@ fn count_dirs(
 
     let paths = &paths_vec[from..to];
     for path in paths {
-        match count_dir_file(path, ext_vec) {
+        match count_file_rows_with_ext(path, ext_vec) {
             Err(why) => {
                 let _ = tx.send(Err(why));
             }
@@ -358,7 +347,7 @@ fn count_dir(path: &Path, ext_vec: &Vec<String>) -> Result<Total, String> {
                 }
             }
         } else {
-            match count_dir_file(&path, ext_vec) {
+            match count_file_rows_with_ext(&path, ext_vec) {
                 Err(why) => return Err(why),
                 Ok(res) => {
                     if res.ignore {
@@ -377,11 +366,11 @@ fn count_dir(path: &Path, ext_vec: &Vec<String>) -> Result<Total, String> {
     })
 }
 
-fn count_dir_file(path: &Path, ext_vec: &Vec<String>) -> Result<FileTotal, String> {
+fn count_file_rows_with_ext(path: &Path, ext_vec: &Vec<String>) -> Result<FileTotal, String> {
     if let Some(val) = path.extension() {
         let path_ext = val.to_str().unwrap().to_owned();
         if ext_vec.contains(&path_ext) {
-            match count_file(path) {
+            match count_file_rows(path) {
                 Err(why) => return Err(why),
                 Ok(res) => {
                     return Ok(FileTotal {
@@ -399,7 +388,7 @@ fn count_dir_file(path: &Path, ext_vec: &Vec<String>) -> Result<FileTotal, Strin
     })
 }
 
-fn count_file(path: &Path) -> Result<usize, String> {
+fn count_file_rows(path: &Path) -> Result<usize, String> {
     let display = path.display();
     let mut file = match File::open(path) {
         Err(why) => return Err(format!("Couldn't open {}: {}", display, why)),
@@ -428,11 +417,26 @@ fn count_all_files(path: &Path) -> Result<usize, String> {
         if path.is_dir() {
             match count_all_files(&path) {
                 Err(why) => return Err(why),
-                Ok(res) => {
-                    file_counter += res;
-                }
-            }
+                Ok(res) => file_counter += res,
+            };
         } else {
+            file_counter += 1;
+        }
+    }
+
+    Ok(file_counter)
+}
+
+fn count_files_in_dir(path: &Path) -> Result<usize, String> {
+    let dir_iter = match fs::read_dir(path) {
+        Err(why) => return Err(format!("Couldn't open directory: {}", why)),
+        Ok(dir_iter) => dir_iter,
+    };
+
+    let mut file_counter = 0;
+    for entry in dir_iter {
+        let path = entry.unwrap().path();
+        if path.is_file() {
             file_counter += 1;
         }
     }
